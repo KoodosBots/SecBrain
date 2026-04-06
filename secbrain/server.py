@@ -222,94 +222,129 @@ def _upsert_entity(
 def vault_start_session(project: str, cwd: str = "") -> str:
     """
     Call at the start of every Claude Code session.
-    Returns project overview, recent bugs, features, decisions, and skills.
+    Returns a lightweight index — titles and counts only, NOT full content.
+    Use vault_recall(project, query) to fetch specific items as needed.
     """
     _ensure_vault()
     pd = _project_dir(project)
     out = [f"# SecBrain Session — {project}\n**Started:** {_ts()}\n"]
 
-    # Log session start
     _append(VAULT / "_system" / "log.md",
             f"\n## Session Start [{_ts()}]\n**Project:** {project}\n**CWD:** {cwd}\n")
 
-    # Overview (cap at 100 lines to protect context window)
+    # Scan prompt (first session only)
     overview = pd / "overview.md"
-    if overview.exists():
-        lines = overview.read_text().splitlines()
-        out.append("## Project Overview\n" + "\n".join(lines[:100]) + "\n")
-    else:
+    if not overview.exists():
         out.append(
-            "## Project Overview\n"
-            "*(No overview yet. Call `vault_scan_project(project, cwd)` NOW to index "
-            "this codebase — do this before anything else.)*\n"
+            "**No codebase index yet.** Call `vault_scan_project(project, cwd)` "
+            "before anything else.\n"
         )
+    else:
+        # Just the first 5 lines of overview as a quick reminder
+        lines = overview.read_text().splitlines()
+        out.append("## Project\n" + "\n".join(lines[:5]) + "\n")
 
-    # Recent bugs (last 20 lines)
-    bugs_file = pd / "bugs.md"
-    if bugs_file.exists():
-        lines = bugs_file.read_text().splitlines()
-        out.append("## Known Bugs\n" + "\n".join(lines[-20:]) + "\n")
+    # Inline the full index (titles only — lightweight)
+    out.append(vault_get_index(project))
 
-    # Recent features (last 20 lines)
-    features_file = pd / "features.md"
-    if features_file.exists():
-        lines = features_file.read_text().splitlines()
-        out.append("## Recent Features\n" + "\n".join(lines[-20:]) + "\n")
-
-    # Open tasks (todo/doing only)
-    tasks_file = pd / "tasks.md"
-    if tasks_file.exists():
-        content = tasks_file.read_text()
-        open_lines = [
-            l for l in content.splitlines()
-            if "[TODO]" in l or "[DOING]" in l or "[REVIEW]" in l
-        ]
-        if open_lines:
-            out.append("## Open Tasks\n" + "\n".join(open_lines[-15:]) + "\n")
-
-    # Recent decisions (last 15 lines)
-    decisions_file = pd / "decisions.md"
-    if decisions_file.exists():
-        lines = decisions_file.read_text().splitlines()
-        out.append("## Recent Decisions\n" + "\n".join(lines[-15:]) + "\n")
-
-    # Global skills index (last 10)
-    skills_index = VAULT / "skills" / "global" / "index.md"
-    if skills_index.exists():
-        lines = skills_index.read_text().strip().splitlines()
-        out.append("## Available Skills (global)\n" + "\n".join(lines[-10:]) + "\n")
-
-    # Project skills index
-    proj_skills_index = VAULT / "skills" / project / "index.md"
-    if proj_skills_index.exists():
-        lines = proj_skills_index.read_text().strip().splitlines()
-        out.append(f"## Available Skills ({project})\n" + "\n".join(lines[-10:]) + "\n")
-
-    # User model
+    # User model (short — behaviour preferences)
     user_model = pd / "user_model.md"
     if user_model.exists():
-        out.append(f"## User Model\n{user_model.read_text()}\n")
-
-    # Ingested docs index
-    raw_index = VAULT / "raw" / "index.md"
-    if raw_index.exists():
-        lines = raw_index.read_text().strip().splitlines()
-        if lines:
-            out.append("## Ingested Docs\n" + "\n".join(lines[-8:]) + "\n")
+        lines = user_model.read_text().splitlines()
+        out.append("## User Preferences\n" + "\n".join(lines[:15]) + "\n")
 
     out.append(
-        "## Instructions\n"
-        "- Call `vault_recall_skill(query, project)` before tackling complex problems\n"
-        "- Call `vault_search_docs(project, query)` to search ingested documentation\n"
-        "- Call `vault_log_bug/feature/task/decision` as you discover them\n"
-        "- Call `vault_update_task(project, title, new_status)` as tasks progress\n"
-        "- Call `vault_save_skill` after solving something non-obvious\n"
-        "- Call `vault_log_code_example` for reusable snippets\n"
-        "- Call `vault_ingest_url(url, project)` to store reference docs\n"
-        "- Call `vault_end_session(project, summary)` when done\n"
+        "## How to use this vault\n"
+        "- **Before working on anything**: `vault_recall(project, query)` "
+        "— pulls bugs, decisions, skills relevant to your topic.\n"
+        "- **Log as you go**: `vault_log_bug/feature/task/decision(project, ..., tags='ui,auth')`\n"
+        "- **New skill solved**: `vault_save_skill(project, ...)`\n"
+        "- **End of session**: `vault_end_session(project, summary)`\n"
     )
 
     return "\n".join(out)
+
+
+@mcp.tool()
+def vault_get_index(project: str) -> str:
+    """
+    Returns a compact table of contents for the project vault — titles and counts only.
+    Use this to know what exists, then call vault_recall(project, query) for specifics.
+    Much lighter than reading full vault content.
+    """
+    _ensure_vault()
+    pd = _project_dir(project)
+    sections = []
+
+    def _extract_titles(filepath: Path, limit: int = 20) -> list[str]:
+        """Pull ### heading titles from a markdown file."""
+        if not filepath.exists():
+            return []
+        titles = []
+        for line in filepath.read_text().splitlines():
+            if line.startswith("### "):
+                titles.append(line[4:].strip())
+        return titles[-limit:]  # most recent first
+
+    # Bugs
+    bug_titles = _extract_titles(pd / "bugs.md")
+    if bug_titles:
+        sections.append(f"**Bugs ({len(bug_titles)}):**\n" +
+                        "\n".join(f"  - {t}" for t in bug_titles))
+
+    # Open tasks
+    tasks_file = pd / "tasks.md"
+    if tasks_file.exists():
+        open_tasks, done_tasks = [], []
+        for line in tasks_file.read_text().splitlines():
+            if line.startswith("### "):
+                title = line[4:].strip()
+                if "[DONE]" in title:
+                    done_tasks.append(title)
+                else:
+                    open_tasks.append(title)
+        if open_tasks:
+            sections.append(f"**Open Tasks ({len(open_tasks)}):**\n" +
+                            "\n".join(f"  - {t}" for t in open_tasks[-10:]))
+        if done_tasks:
+            sections.append(f"**Completed Tasks:** {len(done_tasks)}")
+
+    # Features
+    feat_titles = _extract_titles(pd / "features.md")
+    if feat_titles:
+        sections.append(f"**Features ({len(feat_titles)}):**\n" +
+                        "\n".join(f"  - {t}" for t in feat_titles[-10:]))
+
+    # Decisions
+    dec_titles = _extract_titles(pd / "decisions.md")
+    if dec_titles:
+        sections.append(f"**Decisions ({len(dec_titles)}):**\n" +
+                        "\n".join(f"  - {t}" for t in dec_titles[-8:]))
+
+    # Skills
+    proj_idx = VAULT / "skills" / project / "index.md"
+    glob_idx = VAULT / "skills" / "global" / "index.md"
+    skill_lines = []
+    if proj_idx.exists():
+        skill_lines += [f"  [project] {l[2:].split('(')[0].strip()}"
+                        for l in proj_idx.read_text().splitlines() if l.startswith("- ")]
+    if glob_idx.exists():
+        skill_lines += [f"  [global]  {l[2:].split('(')[0].strip()}"
+                        for l in glob_idx.read_text().splitlines() if l.startswith("- ")]
+    if skill_lines:
+        sections.append(f"**Skills ({len(skill_lines)}):**\n" + "\n".join(skill_lines[-10:]))
+
+    # Ingested docs count
+    raw_idx = VAULT / "raw" / "index.md"
+    if raw_idx.exists():
+        doc_count = sum(1 for l in raw_idx.read_text().splitlines() if l.startswith("- "))
+        if doc_count:
+            sections.append(f"**Ingested Docs:** {doc_count} — use `vault_search_docs(project, query)`")
+
+    if not sections:
+        return "## Vault Index\n*(Empty — nothing logged yet)*\n"
+
+    return "## Vault Index\n" + "\n\n".join(sections) + "\n"
 
 
 @mcp.tool()
@@ -339,22 +374,26 @@ def vault_log_bug(
     description: str,
     severity: str = "medium",
     file_path: str = "",
+    tags: str = "",
 ) -> str:
     """
     Log a bug or error discovered during the session.
     severity: low | medium | high | critical
+    tags: comma-separated area tags e.g. 'ui,mobile,auth' — used for targeted recall
     """
     _ensure_vault()
     pd = _project_dir(project)
-    entry = (
-        f"\n### [{_ts()}] [{severity.upper()}] {title}\n"
-        f"{description}\n"
-    )
+    entry = f"\n### [{_ts()}] [{severity.upper()}] {title}\n"
+    if tags:
+        entry += f"**Tags:** {tags}\n"
+    entry += f"{description}\n"
     if file_path:
         entry += f"**File:** {file_path}\n"
     _append(pd / "bugs.md", entry)
-    _upsert_entity(project, title, "bug", description[:200], file_path, _severity_score(severity))
-    _append(VAULT / "_system" / "log.md", f"- [{_ts()}] BUG [{severity}] {project}: {title}\n")
+    _upsert_entity(project, title, "bug", f"{tags} {description}"[:200], file_path,
+                   _severity_score(severity))
+    _append(VAULT / "_system" / "log.md",
+            f"- [{_ts()}] BUG [{severity}] {project}: {title} [{tags}]\n")
     return f"Bug logged: {title}"
 
 
@@ -364,17 +403,23 @@ def vault_log_feature(
     title: str,
     description: str,
     status: str = "implemented",
+    tags: str = "",
 ) -> str:
     """
     Log a feature implemented or planned during the session.
     status: planned | in_progress | implemented
+    tags: comma-separated area tags e.g. 'ui,payments,api'
     """
     _ensure_vault()
     pd = _project_dir(project)
-    entry = f"\n### [{_ts()}] [{status.upper()}] {title}\n{description}\n"
+    entry = f"\n### [{_ts()}] [{status.upper()}] {title}\n"
+    if tags:
+        entry += f"**Tags:** {tags}\n"
+    entry += f"{description}\n"
     _append(pd / "features.md", entry)
-    _upsert_entity(project, title, "feature", description[:200], "", 3)
-    _append(VAULT / "_system" / "log.md", f"- [{_ts()}] FEATURE [{status}] {project}: {title}\n")
+    _upsert_entity(project, title, "feature", f"{tags} {description}"[:200], "", 3)
+    _append(VAULT / "_system" / "log.md",
+            f"- [{_ts()}] FEATURE [{status}] {project}: {title} [{tags}]\n")
     return f"Feature logged: {title}"
 
 
@@ -383,16 +428,22 @@ def vault_log_decision(
     project: str,
     title: str,
     rationale: str,
+    tags: str = "",
 ) -> str:
     """
     Log an architectural or design decision made during the session.
+    tags: comma-separated area tags e.g. 'architecture,ui,database'
     """
     _ensure_vault()
     pd = _project_dir(project)
-    entry = f"\n### [{_ts()}] {title}\n**Rationale:** {rationale}\n"
+    entry = f"\n### [{_ts()}] {title}\n"
+    if tags:
+        entry += f"**Tags:** {tags}\n"
+    entry += f"**Rationale:** {rationale}\n"
     _append(pd / "decisions.md", entry)
-    _upsert_entity(project, title, "decision", rationale[:200], "", 3)
-    _append(VAULT / "_system" / "log.md", f"- [{_ts()}] DECISION {project}: {title}\n")
+    _upsert_entity(project, title, "decision", f"{tags} {rationale}"[:200], "", 3)
+    _append(VAULT / "_system" / "log.md",
+            f"- [{_ts()}] DECISION {project}: {title} [{tags}]\n")
     return f"Decision logged: {title}"
 
 
@@ -402,10 +453,12 @@ def vault_log_decision(
 
 
 @mcp.tool()
-def vault_recall(project: str, query: str) -> str:
+def vault_recall(project: str, query: str, tags: str = "") -> str:
     """
     Search vault for anything related to query across bugs, features, tasks, decisions, sessions,
     and ingested docs. Uses semantic search if ChromaDB is available.
+    tags: optional comma-separated filter e.g. 'ui,mobile' — narrows results to matching tags.
+    Example: vault_recall('myapp', 'layout', tags='ui') before working on UI changes.
     """
     _ensure_vault()
     pd = _project_dir(project)
@@ -420,23 +473,42 @@ def vault_recall(project: str, query: str) -> str:
             src = meta.get("url") or meta.get("source", "")
             results.append(f"**{meta.get('title', 'Untitled')}** [{src}]\n{hit['text'][:400]}\n")
 
+    # Tag pre-filter: if tags provided, only return entries that mention those tags
+    tag_list = [t.strip().lower() for t in tags.split(",") if t.strip()] if tags else []
+
     # Full-text search across project markdown files (cap per file to protect context)
     for fname in ["bugs.md", "features.md", "tasks.md", "decisions.md", "sessions.md", "overview.md"]:
         fpath = pd / fname
         if not fpath.exists():
             continue
         content = fpath.read_text()
-        if query.lower() not in content.lower():
+        lower_content = content.lower()
+        if query.lower() not in lower_content:
+            continue
+        # Tag filter: skip this file section if tags don't match
+        if tag_list and not any(t in lower_content for t in tag_list):
             continue
         lines = content.splitlines()
-        matching, in_section = [], False
+        matching, in_section, section_buf = [], False, []
         for line in lines:
-            if line.startswith("###") or line.startswith("##"):
-                in_section = query.lower() in line.lower()
-            if in_section:
-                matching.append(line)
-            if len(matching) >= 20:   # cap at 20 lines per file
+            if line.startswith("### "):
+                # Save previous section if it matched
+                if in_section and section_buf:
+                    matching.extend(section_buf[:8])  # max 8 lines per entry
+                section_buf = [line]
+                title_lower = line.lower()
+                query_match = query.lower() in title_lower
+                tag_match = not tag_list or any(t in title_lower for t in tag_list)
+                in_section = query_match or tag_match
+            elif in_section:
+                section_buf.append(line)
+                # Also check tags in body
+                if tag_list and any(t in line.lower() for t in tag_list):
+                    in_section = True
+            if len(matching) >= 20:
                 break
+        if in_section and section_buf:
+            matching.extend(section_buf[:8])
         if matching:
             results.append(f"### From {fname}\n" + "\n".join(matching))
 

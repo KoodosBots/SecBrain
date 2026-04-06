@@ -12,44 +12,39 @@ CLAUDE_MD_BLOCK = """<!-- SECBRAIN:START -->
 ## SecBrain Memory
 VAULT_PROJECT={project}
 
-At session START: `vault_start_session` runs automatically via hook.
+At session START: `vault_start_session` fires automatically. You get a vault index
+(titles + counts only). Use `vault_recall` to fetch details on demand.
 
-### Log as you work
-- Bug/error -> `vault_log_bug(project, title, description, severity, file_path?)`
-- Feature implemented -> `vault_log_feature(project, title, description, status?)`
-- Work item -> `vault_log_task(project, title, description, status, assignee?)`
-  - status: todo | doing | review | done
-  - Update as it progresses: `vault_update_task(project, title, new_status, note?)`
-- Decision -> `vault_log_decision(project, title, rationale)`
-- Reusable snippet -> `vault_log_code_example(project, description, code, language?, tags?)`
-
-At session END: call `vault_end_session(project, summary)`.
+### Index-first workflow
+Before touching any feature or bug, call:
+`vault_recall(project, query, tags='relevant,tags')`
+Example: working on Dominoes UI? -> `vault_recall(project, 'UI', tags='ui,mobile')`
+This pulls only what matters. Do NOT read the whole vault.
 
 ### First session only
-- `vault_scan_project(project, cwd)` — index the codebase if no overview exists yet
+`vault_scan_project(project, cwd)` — scan codebase if no overview exists.
 
-### Before complex tasks
-- `vault_recall_skill(query, project)` — check if this problem was solved before
-- `vault_search_code(project, query)` — check saved code examples
-- `vault_search_docs(project, query)` — search ingested documentation
-- `vault_recall(project, query)` — broad search across everything
+### Log as you work (always add tags)
+- Bug -> `vault_log_bug(project, title, description, severity, tags='ui,auth')`
+- Feature -> `vault_log_feature(project, title, description, status?, tags='api,ui')`
+- Task -> `vault_log_task(project, title, description, status)` | `vault_update_task(...)`
+- Decision -> `vault_log_decision(project, title, rationale, tags='architecture')`
+- Snippet -> `vault_log_code_example(project, description, code, language?, tags?)`
 
-### Ingest reference material
-- `vault_ingest_url(url, project, title?, tags?)` — fetch and store a doc page
-- `vault_ingest_file(file_path, project, title?, tags?)` — store local file (.md/.txt/.pdf)
+At session END: `vault_end_session(project, summary)`.
+
+### Deeper lookups
+- `vault_recall_skill(query, project)` — solved this before?
+- `vault_search_code(project, query)` — saved snippets
+- `vault_search_docs(project, query)` — ingested docs
+- `vault_ingest_url(url, project)` / `vault_ingest_file(path, project)` — store reference
 
 ### Self-improvement
-After solving something non-obvious:
-- `vault_save_skill(project, title, problem, solution, code_example?, tags?, scope?)`
-  - scope="global" if cross-project, "project" if specific
+- `vault_save_skill(project, title, problem, solution, tags?, scope?)` after non-obvious fixes
+  scope="global" if reusable across projects
+- `vault_improve_skill(project, skill_name, refinement)` when a skill gets better
+- `vault_update_user_model(project, observation)` when noticing user patterns
 
-When a skill improves:
-- `vault_improve_skill(project, skill_name, refinement)`
-
-When noticing a user pattern:
-- `vault_update_user_model(project, observation)`
-
-### Skill quality bar
 Only save skills that are: non-obvious, reusable, proven.
 <!-- SECBRAIN:END -->
 """
