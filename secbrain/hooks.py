@@ -100,14 +100,29 @@ try:
 
     if transcript_path and Path(transcript_path).exists():
         lines = Path(transcript_path).read_text(errors="replace").splitlines()
-        for line in lines[-300:]:   # scan last 300 entries only
+        # Track what tool each result belongs to
+        last_tool_name = ""
+        for line in lines[-300:]:
             try:
                 entry = json.loads(line)
                 content = entry.get("message", {{}}).get("content", [])
                 if isinstance(content, list):
                     for block in content:
-                        if isinstance(block, dict) and block.get("is_error"):
-                            text = str(block.get("content", ""))[:150]
+                        if not isinstance(block, dict):
+                            continue
+                        # Track tool_use names so we know which tool errored
+                        if block.get("type") == "tool_use":
+                            last_tool_name = block.get("name", "")
+                        # Only capture errors from code/bash execution
+                        # Skip Edit/Write/file tool errors (Claude's own mistakes)
+                        if block.get("is_error") and last_tool_name in (
+                            "Bash", "bash", "execute_command", "run_command",
+                            "mcp__ide__executeCode", "computer",
+                        ):
+                            raw = block.get("content", "")
+                            if isinstance(raw, list):
+                                raw = " ".join(str(r) for r in raw)
+                            text = str(raw).strip()[:200]
                             if text and text not in errors:
                                 errors.append(text)
             except Exception:
