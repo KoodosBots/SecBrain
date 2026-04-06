@@ -240,6 +240,28 @@ def vault_start_session(project: str, cwd: str = "") -> str:
     if update_notice:
         out.append(f"> **{update_notice}**\n")
 
+    # Files modified in previous session (from PostToolUse hook dirty-file tracking)
+    try:
+        import glob as _glob
+        import tempfile as _tmp
+        tmp = _tmp.gettempdir()
+        dirty_files: list[str] = []
+        for dirty_path in sorted(_glob.glob(f"{tmp}/secbrain_dirty_*"),
+                                  key=lambda p: Path(p).stat().st_mtime, reverse=True):
+            lines = Path(dirty_path).read_text(errors="replace").splitlines()
+            # Only load files belonging to this project's cwd
+            for line in lines:
+                if line.strip() and cwd and cwd in line:
+                    dirty_files.append(line.strip())
+            if dirty_files:
+                break  # Use most recent session's list only
+        if dirty_files:
+            unique = list(dict.fromkeys(dirty_files))[:20]
+            out.append("## Files Changed Last Session\n" +
+                       "\n".join(f"  - {f}" for f in unique) + "\n")
+    except Exception:
+        pass
+
     # Scan prompt (first session only)
     overview = pd / "overview.md"
     if not overview.exists():
