@@ -232,12 +232,17 @@ def vault_start_session(project: str, cwd: str = "") -> str:
     _append(VAULT / "_system" / "log.md",
             f"\n## Session Start [{_ts()}]\n**Project:** {project}\n**CWD:** {cwd}\n")
 
-    # Overview
+    # Overview (cap at 100 lines to protect context window)
     overview = pd / "overview.md"
     if overview.exists():
-        out.append(f"## Project Overview\n{overview.read_text()}\n")
+        lines = overview.read_text().splitlines()
+        out.append("## Project Overview\n" + "\n".join(lines[:100]) + "\n")
     else:
-        out.append("## Project Overview\n*(No overview yet — call vault_update_overview to create one)*\n")
+        out.append(
+            "## Project Overview\n"
+            "*(No overview yet. Call `vault_scan_project(project, cwd)` NOW to index "
+            "this codebase — do this before anything else.)*\n"
+        )
 
     # Recent bugs (last 20 lines)
     bugs_file = pd / "bugs.md"
@@ -415,7 +420,7 @@ def vault_recall(project: str, query: str) -> str:
             src = meta.get("url") or meta.get("source", "")
             results.append(f"**{meta.get('title', 'Untitled')}** [{src}]\n{hit['text'][:400]}\n")
 
-    # Full-text search across project markdown files
+    # Full-text search across project markdown files (cap per file to protect context)
     for fname in ["bugs.md", "features.md", "tasks.md", "decisions.md", "sessions.md", "overview.md"]:
         fpath = pd / fname
         if not fpath.exists():
@@ -430,8 +435,10 @@ def vault_recall(project: str, query: str) -> str:
                 in_section = query.lower() in line.lower()
             if in_section:
                 matching.append(line)
+            if len(matching) >= 20:   # cap at 20 lines per file
+                break
         if matching:
-            results.append(f"### From {fname}\n" + "\n".join(matching[:30]))
+            results.append(f"### From {fname}\n" + "\n".join(matching))
 
     # Entity graph search
     conn = _db()
@@ -757,6 +764,124 @@ def vault_update_user_model(project: str, observation: str) -> str:
 
 def _severity_score(severity: str) -> int:
     return {"low": 2, "medium": 3, "high": 4, "critical": 5}.get(severity.lower(), 3)
+
+
+# ---------------------------------------------------------------------------
+# Codebase scanning
+# ---------------------------------------------------------------------------
+
+# Files/dirs to skip when scanning a project
+_SCAN_SKIP = {
+    ".git", ".svn", "node_modules", "__pycache__", ".venv", "venv",
+    "dist", "build", ".next", ".nuxt", "coverage", ".pytest_cache",
+    ".mypy_cache", ".ruff_cache", ".secbrain", ".firecrawl",
+}
+_SCAN_ENTRY_PATTERNS = {
+    "package.json", "pyproject.toml", "setup.py", "cargo.toml",
+    "go.mod", "pom.xml", "build.gradle", "composer.json",
+    "readme.md", "readme.rst", "readme.txt",
+    "main.py", "app.py", "index.js", "index.ts", "main.ts",
+    "main.go", "main.rs", "app.ts", "server.py", "server.ts",
+}
+_SCAN_MAX_FILE_BYTES = 8_000   # read at most 8KB per file for the summary
+_SCAN_MAX_FILES = 30           # cap how many files we read in detail
+
+
+@mcp.tool()
+def vault_scan_project(project: str, cwd: str) -> str:
+    """
+    Scan the project directory and store a structured overview in the vault.
+    Call this ONCE on first session when no overview exists.
+    Returns a short confirmation — the full overview is stored for future sessions.
+    Does NOT dump the codebase into context; stores it in the vault instead.
+    """
+    _ensure_vault()
+    root = Path(cwd).expanduser().resolve()
+    if not root.exists():
+        return f"Directory not found: {cwd}"
+
+    # --- Walk file tree ---
+    all_files: list[Path] = []
+    entry_files: list[Path] = []
+
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Prune ignored dirs in-place
+        dirnames[:] = [d for d in dirnames if d not in _SCAN_SKIP and not d.startswith(".")]
+        for fname in filenames:
+            fp = Path(dirpath) / fname
+            all_files.append(fp)
+            if fname.lower() in _SCAN_ENTRY_PATTERNS:
+                entry_files.append(fp)
+
+    # Build compact file tree (relative paths, skip binaries/heavy dirs)
+    tree_lines = []
+    for f in sorted(all_files)[:200]:
+        rel = f.relative_to(root)
+        tree_lines.append(str(rel))
+    file_tree = "\n".join(tree_lines)
+
+    # Read key entry-point files
+    key_content_parts = []
+    files_read = 0
+    for fp in sorted(entry_files, key=lambda p: len(p.parts)):
+        if files_read >= _SCAN_MAX_FILES:
+            break
+        try:
+            content = fp.read_bytes()[:_SCAN_MAX_FILE_BYTES].decode("utf-8", errors="replace")
+            rel = fp.relative_to(root)
+            key_content_parts.append(f"### {rel}\n```\n{content}\n```")
+            files_read += 1
+        except Exception:
+            pass
+
+    # Detect stack from file patterns
+    stack_hints = []
+    names_lower = {f.name.lower() for f in all_files}
+    if "package.json" in names_lower:
+        stack_hints.append("Node.js/JavaScript")
+    if any(n in names_lower for n in ["pyproject.toml", "setup.py", "requirements.txt"]):
+        stack_hints.append("Python")
+    if "cargo.toml" in names_lower:
+        stack_hints.append("Rust")
+    if "go.mod" in names_lower:
+        stack_hints.append("Go")
+    if any(n.endswith(".tsx") or n.endswith(".jsx") for n in names_lower):
+        stack_hints.append("React")
+    if any(n.endswith(".vue") for n in names_lower):
+        stack_hints.append("Vue")
+    if "next.config.js" in names_lower or "next.config.ts" in names_lower:
+        stack_hints.append("Next.js")
+
+    # Compose the overview document stored in vault
+    overview_doc = (
+        f"# {project} — Codebase Overview\n"
+        f"**Scanned:** {_ts()}\n"
+        f"**Root:** {root}\n"
+        f"**Stack:** {', '.join(stack_hints) or 'unknown'}\n"
+        f"**Total files:** {len(all_files)}\n\n"
+        f"## File Tree\n```\n{file_tree}\n```\n\n"
+        f"## Key Files\n" + "\n\n".join(key_content_parts)
+    )
+
+    pd = _project_dir(project)
+    (pd / "overview.md").write_text(overview_doc[:40_000])  # cap stored doc at 40KB
+
+    # Also store raw for search
+    slug = f"scan-{project}"
+    raw_file = VAULT / "raw" / f"{slug}.md"
+    raw_file.write_text(overview_doc[:50_000])
+    _append(VAULT / "raw" / "index.md",
+            f"- [Codebase scan: {project}]({slug}.md) -- {root} [{_ts()}]\n")
+
+    _append(VAULT / "_system" / "log.md",
+            f"- [{_ts()}] SCAN {project}: {len(all_files)} files, stack: {', '.join(stack_hints)}\n")
+
+    return (
+        f"Codebase indexed: {len(all_files)} files scanned, "
+        f"{files_read} key files read. "
+        f"Stack detected: {', '.join(stack_hints) or 'unknown'}. "
+        f"Overview stored — will load on next vault_start_session."
+    )
 
 
 # ---------------------------------------------------------------------------

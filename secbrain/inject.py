@@ -25,6 +25,9 @@ At session START: `vault_start_session` runs automatically via hook.
 
 At session END: call `vault_end_session(project, summary)`.
 
+### First session only
+- `vault_scan_project(project, cwd)` — index the codebase if no overview exists yet
+
 ### Before complex tasks
 - `vault_recall_skill(query, project)` — check if this problem was solved before
 - `vault_search_code(project, query)` — check saved code examples
