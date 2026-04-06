@@ -100,9 +100,19 @@ try:
 
     if transcript_path and Path(transcript_path).exists():
         lines = Path(transcript_path).read_text(errors="replace").splitlines()
+        # Only scan entries from the current session_id + last 100 entries
+        current_session = hook_input.get("session_id", "")
+        relevant = []
+        for line in lines[-100:]:
+            try:
+                e = json.loads(line)
+                if not current_session or e.get("sessionId") == current_session:
+                    relevant.append(line)
+            except Exception:
+                pass
         # Track what tool each result belongs to
         last_tool_name = ""
-        for line in lines[-300:]:
+        for line in relevant:
             try:
                 entry = json.loads(line)
                 content = entry.get("message", {{}}).get("content", [])
