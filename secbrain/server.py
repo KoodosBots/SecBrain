@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import html.parser
+import json
 import os
 import re
 import sqlite3
@@ -18,6 +19,8 @@ import subprocess
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+
+from secbrain import __version__ as _SERVER_VERSION
 
 from fastmcp import FastMCP
 from starlette.middleware import Middleware
@@ -231,6 +234,11 @@ def vault_start_session(project: str, cwd: str = "") -> str:
 
     _append(VAULT / "_system" / "log.md",
             f"\n## Session Start [{_ts()}]\n**Project:** {project}\n**CWD:** {cwd}\n")
+
+    # Version update notice (cached, non-blocking)
+    update_notice = _check_version()
+    if update_notice:
+        out.append(f"> **{update_notice}**\n")
 
     # Scan prompt (first session only)
     overview = pd / "overview.md"
@@ -836,6 +844,49 @@ def vault_update_user_model(project: str, observation: str) -> str:
 
 def _severity_score(severity: str) -> int:
     return {"low": 2, "medium": 3, "high": 4, "critical": 5}.get(severity.lower(), 3)
+
+
+def _check_version() -> str | None:
+    """
+    Check PyPI for a newer version of secbrain.
+    Caches result for 24h in vault/_system/version_check.json.
+    Returns an update notice string, or None if up to date / check failed.
+    """
+    cache_file = VAULT / "_system" / "version_check.json"
+    try:
+        # Use cached result if < 24h old
+        if cache_file.exists():
+            cached = json.loads(cache_file.read_text())
+            age_hours = (datetime.now(timezone.utc).timestamp() - cached.get("ts", 0)) / 3600
+            if age_hours < 24:
+                latest = cached.get("latest")
+                if latest and latest != _SERVER_VERSION:
+                    return (f"[SecBrain] Update available: v{_SERVER_VERSION} -> v{latest}. "
+                            f"Run `secbrain update` to upgrade.")
+                return None
+
+        # Hit PyPI JSON API
+        req = urllib.request.Request(
+            "https://pypi.org/pypi/secbrain/json",
+            headers={"User-Agent": f"secbrain/{_SERVER_VERSION}"},
+        )
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read())
+        latest = data["info"]["version"]
+
+        # Cache result
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps({
+            "latest": latest,
+            "ts": datetime.now(timezone.utc).timestamp(),
+        }))
+
+        if latest != _SERVER_VERSION:
+            return (f"[SecBrain] Update available: v{_SERVER_VERSION} -> v{latest}. "
+                    f"Run `secbrain update` to upgrade.")
+    except Exception:
+        pass  # Never block session start on a version check
+    return None
 
 
 # ---------------------------------------------------------------------------

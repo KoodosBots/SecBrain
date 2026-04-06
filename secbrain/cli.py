@@ -251,6 +251,38 @@ def stop():
         console.print(f"[red]Error stopping server:[/red] {e}")
 
 
+@app.command()
+def update():
+    """Upgrade SecBrain to the latest version and redeploy VPS if needed."""
+    import subprocess as _sp
+    import sys as _sys
+
+    cfg = config.load()
+
+    # 1. Upgrade local pip package
+    with console.status("[bold]Upgrading secbrain...[/bold]"):
+        result = _sp.run(
+            [_sys.executable, "-m", "pip", "install", "--upgrade", "secbrain", "-q"],
+            capture_output=True, text=True,
+        )
+    if result.returncode != 0:
+        console.print(f"[red]pip upgrade failed:[/red] {result.stderr}")
+        raise typer.Exit(1)
+    console.print("[green][OK][/green] Local package upgraded")
+
+    # 2. Redeploy VPS if configured
+    if cfg and cfg.get("mode") == "vps" and cfg.get("ssh"):
+        if typer.confirm(f"Redeploy server to {cfg['ssh']}?", default=True):
+            try:
+                from . import deploy as _deploy
+                _deploy.redeploy(cfg["ssh"], cfg.get("api_key", ""))
+            except Exception as e:
+                console.print(f"[red]VPS redeploy failed:[/red] {e}")
+                raise typer.Exit(1)
+
+    console.print("\n[bold]Restart Claude Code to activate the new version.[/bold]")
+
+
 @app.command(name="deploy")
 def deploy_cmd(
     ssh: str = typer.Option(None, "--ssh", help="user@host (overrides config)"),
