@@ -9,7 +9,7 @@ SecBrain gives Claude Code a long-term memory vault that persists across session
 ## Install
 
 ```bash
-pip install secbrain
+pip install secbrain -q
 ```
 
 ## Quick Start
