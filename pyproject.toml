@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "secbrain"
+version = "0.1.0"
+description = "Persistent memory for Claude Code — local or VPS"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "typer>=0.12",
+    "rich>=13",
+    "fastmcp>=2.0",
+    "paramiko>=3.0",
+    "requests>=2.31",
+    "uvicorn>=0.29",
+    "starlette>=0.37",
+]
+
+[project.optional-dependencies]
+semantic = ["chromadb>=0.5"]
+pdf = ["PyPDF2>=3.0"]
+all = ["chromadb>=0.5", "PyPDF2>=3.0"]
+
+[project.scripts]
+secbrain = "secbrain.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["secbrain"]
