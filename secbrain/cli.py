@@ -270,6 +270,12 @@ def update():
         raise typer.Exit(1)
     console.print("[green][OK][/green] Local package upgraded")
 
+    # Reinstall hook scripts so latest versions are on disk
+    if cfg:
+        from .hooks import install as _install_hooks
+        _install_hooks(cfg["vault_url"], cfg["api_key"])
+        console.print("[green][OK][/green] Hook scripts updated")
+
     # 2. Redeploy VPS if configured
     if cfg and cfg.get("mode") == "vps" and cfg.get("ssh"):
         if typer.confirm(f"Redeploy server to {cfg['ssh']}?", default=True):
