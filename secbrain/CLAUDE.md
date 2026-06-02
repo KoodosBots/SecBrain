@@ -24,7 +24,7 @@ At session END: call `vault_end_session(project, summary)`.
 ### Ingest reference material
 - `vault_ingest_url(url, project, title?, tags?)` � fetch and store a doc page
 - `vault_ingest_file(file_path, project, title?, tags?)` � store local file (.md/.txt/.pdf)
-- `vault_ingest_youtube(url, project, title?, tags?, languages?)` � store a video transcript (needs `pip install youtube-transcript-api`; run locally � YouTube blocks cloud IPs)
+- `vault_ingest_youtube(url, project, title?, tags?, languages?)` � store a video transcript (needs `youtube-transcript-api` and/or `yt-dlp`; run locally � YouTube blocks cloud IPs)
 
 ### Self-improvement
 After solving something non-obvious:

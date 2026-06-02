@@ -1347,6 +1347,79 @@ def _youtube_video_id(url: str) -> str:
     return ""
 
 
+def _vtt_to_text(vtt: str) -> str:
+    """Strip WebVTT headers/timestamps/cue tags and de-dupe rolling-caption lines."""
+    lines: list[str] = []
+    for line in vtt.splitlines():
+        line = line.strip()
+        if not line or line.startswith(("WEBVTT", "Kind:", "Language:", "NOTE")):
+            continue
+        if "-->" in line:  # timestamp cue
+            continue
+        if line.isdigit():  # numeric cue index
+            continue
+        line = re.sub(r"<[^>]+>", "", line)  # inline tags like <c> and <00:00:00.000>
+        line = line.replace("&nbsp;", " ").strip()
+        if line and (not lines or lines[-1] != line):  # collapse consecutive dups
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def _youtube_via_api(video_id: str, langs: list[str]) -> tuple[str, str]:
+    """Fetch a transcript via youtube-transcript-api. Returns (text, error)."""
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi  # type: ignore
+        from youtube_transcript_api.formatters import TextFormatter  # type: ignore
+    except ImportError:
+        return "", "youtube-transcript-api not installed (pip install youtube-transcript-api)"
+    try:
+        try:
+            fetched = YouTubeTranscriptApi().fetch(video_id, languages=langs)
+            return TextFormatter().format_transcript(fetched), ""
+        except AttributeError:
+            # Older (<1.0) API: static get_transcript -> list of dicts
+            segments = YouTubeTranscriptApi.get_transcript(video_id, languages=langs)
+            return "\n".join(s.get("text", "") for s in segments), ""
+    except Exception as e:
+        return "", f"{type(e).__name__}: {e}"
+
+
+def _youtube_via_ytdlp(video_id: str, langs: list[str]) -> tuple[str, str]:
+    """Fallback: download subtitles with yt-dlp and convert to text. Returns (text, error)."""
+    try:
+        import yt_dlp  # type: ignore
+    except ImportError:
+        return "", "yt-dlp not installed (pip install yt-dlp)"
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        opts = {
+            "writeautomaticsub": True,
+            "writesubtitles": True,
+            "subtitleslangs": langs,
+            "subtitlesformat": "vtt",
+            "skip_download": True,
+            "quiet": True,
+            "no_warnings": True,
+            "outtmpl": str(Path(tmp) / "%(id)s.%(ext)s"),
+        }
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+        except Exception as e:
+            return "", f"{type(e).__name__}: {e}"
+
+        # Prefer a requested language; otherwise take any .vtt produced.
+        vtts = sorted(Path(tmp).glob("*.vtt"))
+        chosen = next(
+            (p for lang in langs for p in vtts if f".{lang}." in p.name),
+            vtts[0] if vtts else None,
+        )
+        if not chosen:
+            return "", "no subtitles available for this video"
+        return _vtt_to_text(chosen.read_text(encoding="utf-8", errors="replace")), ""
+
+
 @mcp.tool()
 def vault_ingest_youtube(
     url: str,
@@ -1360,7 +1433,8 @@ def vault_ingest_youtube(
     Accepts a full URL, a youtu.be/shorts/embed link, or a bare 11-char video ID.
     `languages` is a comma-separated priority list (e.g. "en,de").
 
-    Requires: pip install youtube-transcript-api
+    Tries youtube-transcript-api first, then falls back to yt-dlp (both free).
+    Install at least one: pip install youtube-transcript-api  (and/or)  pip install yt-dlp
 
     NOTE: YouTube blocks requests from cloud-provider IPs, so this typically
     fails on a VPS (RequestBlocked/IpBlocked). Run it from a local machine, or
@@ -1368,33 +1442,21 @@ def vault_ingest_youtube(
     """
     _ensure_vault()
 
-    try:
-        from youtube_transcript_api import YouTubeTranscriptApi  # type: ignore
-        from youtube_transcript_api.formatters import TextFormatter  # type: ignore
-    except ImportError:
-        return "YouTube support requires: pip install youtube-transcript-api"
-
     video_id = _youtube_video_id(url)
     if not video_id:
         return f"Could not parse a YouTube video ID from: {url}"
 
     langs = [l.strip() for l in languages.split(",") if l.strip()] or ["en"]
 
-    # Fetch transcript (handles both the 1.x instance API and the legacy static API)
-    try:
-        try:
-            api = YouTubeTranscriptApi()
-            fetched = api.fetch(video_id, languages=langs)
-            text = TextFormatter().format_transcript(fetched)
-        except AttributeError:
-            # Older (<1.0) API: static get_transcript -> list of dicts
-            segments = YouTubeTranscriptApi.get_transcript(video_id, languages=langs)
-            text = "\n".join(s.get("text", "") for s in segments)
-    except Exception as e:
-        return f"Failed to fetch transcript for '{video_id}': {type(e).__name__}: {e}"
+    # Try the lightweight API first, then fall back to yt-dlp; report both errors.
+    text, err1 = _youtube_via_api(video_id, langs)
+    err2 = ""
+    if len(text.strip()) < 20:
+        text, err2 = _youtube_via_ytdlp(video_id, langs)
 
     if len(text.strip()) < 20:
-        return f"Transcript for '{video_id}' was empty or too short to store."
+        return (f"Failed to fetch transcript for '{video_id}'. "
+                f"youtube-transcript-api: {err1 or 'empty'}; yt-dlp: {err2 or 'empty'}")
 
     canonical_url = f"https://www.youtube.com/watch?v={video_id}"
     if not title:
