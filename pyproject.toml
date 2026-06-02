@@ -21,7 +21,8 @@ dependencies = [
 [project.optional-dependencies]
 semantic = ["chromadb>=0.5"]
 pdf = ["PyPDF2>=3.0"]
-all = ["chromadb>=0.5", "PyPDF2>=3.0"]
+youtube = ["youtube-transcript-api>=1.0"]
+all = ["chromadb>=0.5", "PyPDF2>=3.0", "youtube-transcript-api>=1.0"]
 
 [project.scripts]
 secbrain = "secbrain.cli:main"

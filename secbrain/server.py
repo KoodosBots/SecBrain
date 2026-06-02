@@ -1331,6 +1331,97 @@ def vault_ingest_file(
     return f"Ingested: '{title}' ({len(text):,} chars) -> raw/{slug}.md"
 
 
+def _youtube_video_id(url: str) -> str:
+    """Extract the 11-char YouTube video ID from common URL shapes (or a bare ID)."""
+    url = url.strip()
+    # Already a bare ID
+    if re.fullmatch(r"[0-9A-Za-z_-]{11}", url):
+        return url
+    patterns = (
+        r"(?:v=|/embed/|/shorts/|youtu\.be/|/v/)([0-9A-Za-z_-]{11})",
+    )
+    for pat in patterns:
+        m = re.search(pat, url)
+        if m:
+            return m.group(1)
+    return ""
+
+
+@mcp.tool()
+def vault_ingest_youtube(
+    url: str,
+    project: str,
+    title: str = "",
+    tags: str = "",
+    languages: str = "en",
+) -> str:
+    """
+    Fetch a YouTube video's transcript (captions) and store it in the vault.
+    Accepts a full URL, a youtu.be/shorts/embed link, or a bare 11-char video ID.
+    `languages` is a comma-separated priority list (e.g. "en,de").
+
+    Requires: pip install youtube-transcript-api
+
+    NOTE: YouTube blocks requests from cloud-provider IPs, so this typically
+    fails on a VPS (RequestBlocked/IpBlocked). Run it from a local machine, or
+    configure a residential proxy for youtube-transcript-api.
+    """
+    _ensure_vault()
+
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi  # type: ignore
+        from youtube_transcript_api.formatters import TextFormatter  # type: ignore
+    except ImportError:
+        return "YouTube support requires: pip install youtube-transcript-api"
+
+    video_id = _youtube_video_id(url)
+    if not video_id:
+        return f"Could not parse a YouTube video ID from: {url}"
+
+    langs = [l.strip() for l in languages.split(",") if l.strip()] or ["en"]
+
+    # Fetch transcript (handles both the 1.x instance API and the legacy static API)
+    try:
+        try:
+            api = YouTubeTranscriptApi()
+            fetched = api.fetch(video_id, languages=langs)
+            text = TextFormatter().format_transcript(fetched)
+        except AttributeError:
+            # Older (<1.0) API: static get_transcript -> list of dicts
+            segments = YouTubeTranscriptApi.get_transcript(video_id, languages=langs)
+            text = "\n".join(s.get("text", "") for s in segments)
+    except Exception as e:
+        return f"Failed to fetch transcript for '{video_id}': {type(e).__name__}: {e}"
+
+    if len(text.strip()) < 20:
+        return f"Transcript for '{video_id}' was empty or too short to store."
+
+    canonical_url = f"https://www.youtube.com/watch?v={video_id}"
+    if not title:
+        title = f"YouTube transcript: {video_id}"
+
+    slug = hashlib.md5(canonical_url.encode()).hexdigest()[:12]
+    raw_file = VAULT / "raw" / f"{slug}.md"
+    header = (f"# {title}\n**Source:** {canonical_url}\n"
+              f"**Tags:** {tags}\n**Ingested:** {_ts()}\n\n")
+    raw_file.write_text(header + text[:50_000])
+
+    index = VAULT / "raw" / "index.md"
+    _append(index, f"- [{title}]({slug}.md) -- {canonical_url} [{_ts()}]\n")
+
+    _chroma_add(
+        f"docs_{project}",
+        slug,
+        f"{title}\n{text[:8000]}",
+        {"project": project, "url": canonical_url, "title": title, "tags": tags},
+    )
+
+    _upsert_entity(project, title, "document", f"From {canonical_url}", str(raw_file), 3)
+    _append(VAULT / "_system" / "log.md",
+            f"- [{_ts()}] INGESTED YOUTUBE {project}: {title} ({canonical_url})\n")
+    return f"Ingested: '{title}' ({len(text):,} chars) -> raw/{slug}.md"
+
+
 @mcp.tool()
 def vault_search_docs(project: str, query: str) -> str:
     """

@@ -16,14 +16,15 @@ At session START: `vault_start_session` runs automatically via hook.
 At session END: call `vault_end_session(project, summary)`.
 
 ### Before complex tasks
-- `vault_recall_skill(query, project)` — check if this problem was solved before
-- `vault_search_code(project, query)` — check saved code examples
-- `vault_search_docs(project, query)` — search ingested documentation
-- `vault_recall(project, query)` — broad search across everything
+- `vault_recall_skill(query, project)` ï¿½ check if this problem was solved before
+- `vault_search_code(project, query)` ï¿½ check saved code examples
+- `vault_search_docs(project, query)` ï¿½ search ingested documentation
+- `vault_recall(project, query)` ï¿½ broad search across everything
 
 ### Ingest reference material
-- `vault_ingest_url(url, project, title?, tags?)` — fetch and store a doc page
-- `vault_ingest_file(file_path, project, title?, tags?)` — store local file (.md/.txt/.pdf)
+- `vault_ingest_url(url, project, title?, tags?)` ï¿½ fetch and store a doc page
+- `vault_ingest_file(file_path, project, title?, tags?)` ï¿½ store local file (.md/.txt/.pdf)
+- `vault_ingest_youtube(url, project, title?, tags?, languages?)` ï¿½ store a video transcript (needs `pip install youtube-transcript-api`; run locally ï¿½ YouTube blocks cloud IPs)
 
 ### Self-improvement
 After solving something non-obvious:
